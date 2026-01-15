@@ -1,5 +1,8 @@
 import { useState, useEffect } from 'react'
 import axios from 'axios'
+import { useAuth } from './contexts/AuthContext'
+import Login from './components/Login'
+import UserProfile from './components/UserProfile'
 import TransactionForm from './components/TransactionForm'
 import TransactionList from './components/TransactionList'
 import Summary from './components/Summary'
@@ -8,6 +11,7 @@ import './App.css'
 const API_URL = import.meta.env.VITE_API_URL || '/api'
 
 function App() {
+  const { currentUser } = useAuth()
   const [transactions, setTransactions] = useState([])
   const [summary, setSummary] = useState({ total_income: 0, total_expenses: 0, balance: 0 })
   const [editingTransaction, setEditingTransaction] = useState(null)
@@ -15,10 +19,36 @@ function App() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
 
+  // Show login screen if not authenticated
+  if (!currentUser) {
+    return <Login />
+  }
+
+  // Set up axios interceptor to add auth token
   useEffect(() => {
-    fetchTransactions()
-    fetchSummary()
-  }, [filter])
+    const setupAxiosInterceptor = async () => {
+      if (currentUser) {
+        const token = await currentUser.getIdToken();
+        axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
+
+        // Register/update user in backend
+        try {
+          await axios.post(`${API_URL}/auth/register`);
+        } catch (err) {
+          console.error('Error registering user:', err);
+        }
+      }
+    };
+
+    setupAxiosInterceptor();
+  }, [currentUser]);
+
+  useEffect(() => {
+    if (currentUser) {
+      fetchTransactions();
+      fetchSummary();
+    }
+  }, [filter, currentUser])
 
   const fetchTransactions = async () => {
     try {
@@ -102,6 +132,7 @@ function App() {
     <div className="app">
       <header className="app-header">
         <h1>Personal Finance Tracker</h1>
+        <UserProfile />
       </header>
 
       <main className="app-main">

@@ -4,7 +4,6 @@ const bodyParser = require('body-parser');
 require('dotenv').config();
 
 const pool = require('./db');
-const { verifyFirebaseToken } = require('./auth');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -23,61 +22,14 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', message: 'Server is running' });
 });
 
-// User registration/login endpoint
-app.post('/api/auth/register', verifyFirebaseToken, async (req, res) => {
+// Get all transactions
+app.get('/api/transactions', async (req, res) => {
   try {
-    const { uid, email, name, picture } = req.user;
-
-    // Check if user exists
-    const existingUser = await pool.query(
-      'SELECT * FROM users WHERE firebase_uid = $1',
-      [uid]
-    );
-
-    if (existingUser.rows.length > 0) {
-      // Update last_login
-      const updated = await pool.query(
-        'UPDATE users SET last_login = CURRENT_TIMESTAMP, display_name = $1, photo_url = $2 WHERE firebase_uid = $3 RETURNING *',
-        [name, picture, uid]
-      );
-      return res.json({ user: updated.rows[0], newUser: false });
-    }
-
-    // Create new user
-    const newUser = await pool.query(
-      'INSERT INTO users (firebase_uid, email, display_name, photo_url) VALUES ($1, $2, $3, $4) RETURNING *',
-      [uid, email, name, picture]
-    );
-
-    res.status(201).json({ user: newUser.rows[0], newUser: true });
-  } catch (err) {
-    console.error('Error in user registration:', err);
-    res.status(500).json({ error: 'Failed to register user' });
-  }
-});
-
-// Helper function to get user ID from Firebase UID
-async function getUserId(firebaseUid) {
-  const result = await pool.query(
-    'SELECT id FROM users WHERE firebase_uid = $1',
-    [firebaseUid]
-  );
-  return result.rows[0]?.id;
-}
-
-// Get all transactions (protected)
-app.get('/api/transactions', verifyFirebaseToken, async (req, res) => {
-  try {
-    const userId = await getUserId(req.user.uid);
-    if (!userId) {
-      return res.status(404).json({ error: 'User not found' });
-    }
-
     const { category, type, startDate, endDate } = req.query;
 
-    let query = 'SELECT * FROM transactions WHERE user_id = $1';
-    const params = [userId];
-    let paramCount = 2;
+    let query = 'SELECT * FROM transactions WHERE 1=1';
+    const params = [];
+    let paramCount = 1;
 
     if (category) {
       query += ` AND category = $${paramCount}`;
@@ -113,19 +65,11 @@ app.get('/api/transactions', verifyFirebaseToken, async (req, res) => {
   }
 });
 
-// Get a single transaction by ID (protected)
-app.get('/api/transactions/:id', verifyFirebaseToken, async (req, res) => {
+// Get a single transaction by ID
+app.get('/api/transactions/:id', async (req, res) => {
   try {
-    const userId = await getUserId(req.user.uid);
-    if (!userId) {
-      return res.status(404).json({ error: 'User not found' });
-    }
-
     const { id } = req.params;
-    const result = await pool.query(
-      'SELECT * FROM transactions WHERE id = $1 AND user_id = $2',
-      [id, userId]
-    );
+    const result = await pool.query('SELECT * FROM transactions WHERE id = $1', [id]);
 
     if (result.rows.length === 0) {
       return res.status(404).json({ error: 'Transaction not found' });
@@ -138,14 +82,9 @@ app.get('/api/transactions/:id', verifyFirebaseToken, async (req, res) => {
   }
 });
 
-// Create a new transaction (protected)
-app.post('/api/transactions', verifyFirebaseToken, async (req, res) => {
+// Create a new transaction
+app.post('/api/transactions', async (req, res) => {
   try {
-    const userId = await getUserId(req.user.uid);
-    if (!userId) {
-      return res.status(404).json({ error: 'User not found' });
-    }
-
     const { type, amount, category, description, date } = req.body;
 
     // Validation
@@ -162,8 +101,8 @@ app.post('/api/transactions', verifyFirebaseToken, async (req, res) => {
     }
 
     const result = await pool.query(
-      'INSERT INTO transactions (user_id, type, amount, category, description, date) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
-      [userId, type, amount, category, description || null, date || new Date().toISOString().split('T')[0]]
+      'INSERT INTO transactions (type, amount, category, description, date) VALUES ($1, $2, $3, $4, $5) RETURNING *',
+      [type, amount, category, description || null, date || new Date().toISOString().split('T')[0]]
     );
 
     res.status(201).json(result.rows[0]);
@@ -173,14 +112,9 @@ app.post('/api/transactions', verifyFirebaseToken, async (req, res) => {
   }
 });
 
-// Update a transaction (protected)
-app.put('/api/transactions/:id', verifyFirebaseToken, async (req, res) => {
+// Update a transaction
+app.put('/api/transactions/:id', async (req, res) => {
   try {
-    const userId = await getUserId(req.user.uid);
-    if (!userId) {
-      return res.status(404).json({ error: 'User not found' });
-    }
-
     const { id } = req.params;
     const { type, amount, category, description, date } = req.body;
 
@@ -201,9 +135,9 @@ app.put('/api/transactions/:id', verifyFirebaseToken, async (req, res) => {
            description = COALESCE($4, description),
            date = COALESCE($5, date),
            updated_at = CURRENT_TIMESTAMP
-       WHERE id = $6 AND user_id = $7
+       WHERE id = $6
        RETURNING *`,
-      [type, amount, category, description, date, id, userId]
+      [type, amount, category, description, date, id]
     );
 
     if (result.rows.length === 0) {
@@ -217,19 +151,11 @@ app.put('/api/transactions/:id', verifyFirebaseToken, async (req, res) => {
   }
 });
 
-// Delete a transaction (protected)
-app.delete('/api/transactions/:id', verifyFirebaseToken, async (req, res) => {
+// Delete a transaction
+app.delete('/api/transactions/:id', async (req, res) => {
   try {
-    const userId = await getUserId(req.user.uid);
-    if (!userId) {
-      return res.status(404).json({ error: 'User not found' });
-    }
-
     const { id } = req.params;
-    const result = await pool.query(
-      'DELETE FROM transactions WHERE id = $1 AND user_id = $2 RETURNING *',
-      [id, userId]
-    );
+    const result = await pool.query('DELETE FROM transactions WHERE id = $1 RETURNING *', [id]);
 
     if (result.rows.length === 0) {
       return res.status(404).json({ error: 'Transaction not found' });
@@ -242,14 +168,9 @@ app.delete('/api/transactions/:id', verifyFirebaseToken, async (req, res) => {
   }
 });
 
-// Get transaction summary (protected)
-app.get('/api/transactions/summary/stats', verifyFirebaseToken, async (req, res) => {
+// Get transaction summary (total income and expenses)
+app.get('/api/transactions/summary/stats', async (req, res) => {
   try {
-    const userId = await getUserId(req.user.uid);
-    if (!userId) {
-      return res.status(404).json({ error: 'User not found' });
-    }
-
     const { startDate, endDate } = req.query;
 
     let query = `
@@ -258,11 +179,11 @@ app.get('/api/transactions/summary/stats', verifyFirebaseToken, async (req, res)
         SUM(CASE WHEN type = 'expense' THEN amount ELSE 0 END) as total_expenses,
         SUM(CASE WHEN type = 'income' THEN amount ELSE -amount END) as balance
       FROM transactions
-      WHERE user_id = $1
+      WHERE 1=1
     `;
 
-    const params = [userId];
-    let paramCount = 2;
+    const params = [];
+    let paramCount = 1;
 
     if (startDate) {
       query += ` AND date >= $${paramCount}`;
@@ -284,14 +205,9 @@ app.get('/api/transactions/summary/stats', verifyFirebaseToken, async (req, res)
   }
 });
 
-// Get transactions by category (protected)
-app.get('/api/transactions/summary/by-category', verifyFirebaseToken, async (req, res) => {
+// Get transactions by category
+app.get('/api/transactions/summary/by-category', async (req, res) => {
   try {
-    const userId = await getUserId(req.user.uid);
-    if (!userId) {
-      return res.status(404).json({ error: 'User not found' });
-    }
-
     const { type, startDate, endDate } = req.query;
 
     let query = `
@@ -301,11 +217,11 @@ app.get('/api/transactions/summary/by-category', verifyFirebaseToken, async (req
         SUM(amount) as total,
         COUNT(*) as count
       FROM transactions
-      WHERE user_id = $1
+      WHERE 1=1
     `;
 
-    const params = [userId];
-    let paramCount = 2;
+    const params = [];
+    let paramCount = 1;
 
     if (type) {
       query += ` AND type = $${paramCount}`;

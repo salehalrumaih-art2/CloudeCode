@@ -33,21 +33,54 @@ const initDatabase = async () => {
   try {
     console.log('Checking database schema...');
 
+    // Check if users table exists
+    const checkUsersTable = await pool.query(`
+      SELECT EXISTS (
+        SELECT FROM information_schema.tables
+        WHERE table_name = 'users'
+      );
+    `);
+
+    if (!checkUsersTable.rows[0].exists) {
+      console.log('Creating users table...');
+
+      // Create users table
+      await pool.query(`
+        CREATE TABLE users (
+          id SERIAL PRIMARY KEY,
+          firebase_uid VARCHAR(255) UNIQUE NOT NULL,
+          email VARCHAR(255) NOT NULL,
+          display_name VARCHAR(255),
+          photo_url TEXT,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          last_login TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+      `);
+
+      // Create index on firebase_uid for faster lookups
+      await pool.query(`
+        CREATE INDEX IF NOT EXISTS idx_users_firebase_uid ON users(firebase_uid);
+      `);
+
+      console.log('Users table created successfully!');
+    }
+
     // Check if transactions table exists
-    const checkTable = await pool.query(`
+    const checkTransactionsTable = await pool.query(`
       SELECT EXISTS (
         SELECT FROM information_schema.tables
         WHERE table_name = 'transactions'
       );
     `);
 
-    if (!checkTable.rows[0].exists) {
-      console.log('Initializing database schema...');
+    if (!checkTransactionsTable.rows[0].exists) {
+      console.log('Creating transactions table...');
 
-      // Create transactions table
+      // Create transactions table with user_id
       await pool.query(`
         CREATE TABLE transactions (
           id SERIAL PRIMARY KEY,
+          user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
           type VARCHAR(10) NOT NULL CHECK (type IN ('income', 'expense')),
           amount DECIMAL(10, 2) NOT NULL CHECK (amount > 0),
           category VARCHAR(100) NOT NULL,
@@ -60,6 +93,10 @@ const initDatabase = async () => {
 
       // Create indexes
       await pool.query(`
+        CREATE INDEX IF NOT EXISTS idx_transactions_user_id ON transactions(user_id);
+      `);
+
+      await pool.query(`
         CREATE INDEX IF NOT EXISTS idx_transactions_date ON transactions(date DESC);
       `);
 
@@ -67,20 +104,33 @@ const initDatabase = async () => {
         CREATE INDEX IF NOT EXISTS idx_transactions_category ON transactions(category);
       `);
 
-      // Insert sample data
-      await pool.query(`
-        INSERT INTO transactions (type, amount, category, description, date) VALUES
-          ('income', 5000.00, 'Salary', 'Monthly salary', CURRENT_DATE - INTERVAL '5 days'),
-          ('expense', 50.00, 'Food', 'Grocery shopping', CURRENT_DATE - INTERVAL '4 days'),
-          ('expense', 30.00, 'Transportation', 'Gas', CURRENT_DATE - INTERVAL '3 days'),
-          ('expense', 100.00, 'Utilities', 'Electric bill', CURRENT_DATE - INTERVAL '2 days'),
-          ('income', 200.00, 'Freelance', 'Project payment', CURRENT_DATE - INTERVAL '1 day');
+      console.log('Transactions table created successfully!');
+    } else {
+      // Migration: Add user_id column if it doesn't exist
+      const checkUserIdColumn = await pool.query(`
+        SELECT EXISTS (
+          SELECT FROM information_schema.columns
+          WHERE table_name = 'transactions' AND column_name = 'user_id'
+        );
       `);
 
-      console.log('Database schema initialized successfully with sample data!');
-    } else {
-      console.log('Database schema already exists');
+      if (!checkUserIdColumn.rows[0].exists) {
+        console.log('Migrating transactions table to add user_id...');
+
+        await pool.query(`
+          ALTER TABLE transactions
+          ADD COLUMN user_id INTEGER REFERENCES users(id) ON DELETE CASCADE;
+        `);
+
+        await pool.query(`
+          CREATE INDEX IF NOT EXISTS idx_transactions_user_id ON transactions(user_id);
+        `);
+
+        console.log('Transactions table migrated successfully!');
+      }
     }
+
+    console.log('Database schema check completed!');
   } catch (err) {
     console.error('Error initializing database:', err);
     // Don't exit - let the app run, admin can fix DB issues
